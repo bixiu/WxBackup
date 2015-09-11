@@ -87,10 +87,9 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
             }
 
             public void postKey(SQLiteDatabase database) {
-                Cursor cursor = database.rawQuery("PRAGMA cipher_migrate", new String[]{});
-                cursor.moveToFirst();
-                Log.d(TAG, "cipher_migrate return code: " + cursor.getString(0));
-                cursor.close();
+                database.rawExecSQL("PRAGMA cipher_use_hmac = off");
+                database.rawExecSQL("PRAGMA cipher_page_size = 1024");
+                database.rawExecSQL("PRAGMA kdf_iter = 4000");
             }
         };
 
