@@ -18,9 +18,11 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
 
     private static final String TAG = "WxBackup";
 
+    private static final String WECHAT_PACKAGE_NAME = "com.tencent.mm";
     private static final String WECHAT_BASE_DIR_RELATIVE = "../../com.tencent.mm/MicroMsg";
-    private static final String DATABASE_FILE = "EnMicroMsg.db";
+    private static final String DATABASE_FILE_NAME = "EnMicroMsg.db";
     private static final String WECHAT_USER_ID = "46f43394370ae8866016497c22894ace";
+    private static final String WECHAT_SQLCIPHER_PASSWORD = "d9d70da";
 
     private Context context;
 
@@ -28,17 +30,29 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
         this.context = context;
     }
 
-    private boolean copyDatabaseFile(String wechatBaseDir, String wechatUserId, String targetDir) {
-        String sourceDatabaseFile = wechatBaseDir + "/" + wechatUserId + "/" + DATABASE_FILE;
-        File targetFile = new File(targetDir, DATABASE_FILE);
-        String command = "cp " + sourceDatabaseFile + " " + targetDir;
-        Log.d(TAG, "Copy WeChat database file: " + command);
+    private void logAndExecute(DataOutputStream commandStream, String command) throws
+            IOException {
+        Log.d(TAG, "su command: " + command);
+        commandStream.writeBytes(command + "\n");
+    }
 
+    private boolean setDatabaseFilePermissions(File databaseFile) {
         try {
             Process process = Runtime.getRuntime().exec("su");
             DataOutputStream commandStream = new DataOutputStream(process.getOutputStream());
-            commandStream.writeBytes(command + "\n");
-            commandStream.writeBytes("chmod 666 " + targetFile.getPath() + "\n");
+
+            logAndExecute(commandStream, "chmod 666 " + databaseFile.getPath());
+            File parent = databaseFile.getParentFile();
+            logAndExecute(commandStream, "chmod 777 " + parent.getPath());
+            parent = parent.getParentFile();
+            while (!parent.getName().equals(WECHAT_PACKAGE_NAME) && !parent.getName().equals("")) {
+                logAndExecute(commandStream, "chmod 755 " + parent.getPath());
+                parent = parent.getParentFile();
+            }
+            if (parent.getName().equals(WECHAT_PACKAGE_NAME)) {
+                logAndExecute(commandStream, "chmod 755 " + parent.getPath());
+            }
+
             commandStream.writeBytes("exit\n");
             commandStream.flush();
 
@@ -61,23 +75,24 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
             return false;
         }
 
-        return targetFile.exists() && targetFile.canRead();
+        return databaseFile.canWrite();
     }
 
     @Override
     protected Object doInBackground(Object... params) {
-        String workingDir = context.getFilesDir().getPath();
-        String wechatBaseDir;
+        File databaseFile;
         try {
-            wechatBaseDir = new File(workingDir, WECHAT_BASE_DIR_RELATIVE).getCanonicalPath();
+            String wechatBaseDir = new File(context.getFilesDir(), WECHAT_BASE_DIR_RELATIVE)
+                    .getCanonicalPath();
+            databaseFile = new File(wechatBaseDir, WECHAT_USER_ID + "/" + DATABASE_FILE_NAME);
         } catch (IOException e) {
             e.printStackTrace();
-            Log.e(TAG, "Can not get WeChat base directory");
+            Log.e(TAG, "Can not get WeChat database file path");
             return null;
         }
 
-        if (!copyDatabaseFile(wechatBaseDir, WECHAT_USER_ID, workingDir)) {
-            Log.e(TAG, "Database file copy failed");
+        if (!setDatabaseFilePermissions(databaseFile)) {
+            Log.e(TAG, "Setting database file permissions failed");
             return null;
         }
 
@@ -93,9 +108,8 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
             }
         };
 
-        File databaseFile = new File(workingDir, DATABASE_FILE);
-        SQLiteDatabase database = SQLiteDatabase.openOrCreateDatabase(databaseFile, "d9d70da", null,
-                hook);
+        SQLiteDatabase database = SQLiteDatabase.openOrCreateDatabase(databaseFile,
+                WECHAT_SQLCIPHER_PASSWORD, null, hook);
         Log.d(TAG, "database open");
         Cursor cursor = database.query("message", new String[]{"createTime", "talker", "content"},
                 null, null, null, null, null);
