@@ -21,8 +21,19 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
     private static final String WECHAT_PACKAGE_NAME = "com.tencent.mm";
     private static final String WECHAT_BASE_DIR_RELATIVE = "../../com.tencent.mm/MicroMsg";
     private static final String DATABASE_FILE_NAME = "EnMicroMsg.db";
+    private static final String BACKUP_DATABASE_FILE_NAME = "backup.db";
     private static final String WECHAT_USER_ID = "46f43394370ae8866016497c22894ace";
     private static final String WECHAT_SQLCIPHER_PASSWORD = "d9d70da";
+    private static final String FRIEND_USERNAME = "karen0123";
+
+    private static final String CREATE_MESSAGE_TABLE_SQL =
+            "CREATE TABLE backup.message ( msgId INTEGER, msgSvrId INTEGER PRIMARY KEY, " +
+                    "type INT, status INT, isSend INT, isShowTimer INTEGER, createTime INTEGER, " +
+                    "talker TEXT, content TEXT, imgPath TEXT, reserved TEXT, lvbuffer BLOB, " +
+                    "transContent TEXT, transBrandWording TEXT, talkerId INTEGER, " +
+                    "bizClientMsgId TEXT, bizChatId INTEGER DEFAULT -1, bizChatUserId TEXT )";
+    private static final String CREATE_TIME_INDEX_SQL =
+            "CREATE INDEX backup.messageCreateTimeIndex ON message ( createTime )";
 
     private Context context;
 
@@ -80,18 +91,20 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
 
     @Override
     protected Object doInBackground(Object... params) {
-        File databaseFile;
+        File workingDir = context.getFilesDir();
+        File backupDatabaseFile = new File(workingDir, BACKUP_DATABASE_FILE_NAME);
+        File sourceDatabaseFile;
         try {
-            String wechatBaseDir = new File(context.getFilesDir(), WECHAT_BASE_DIR_RELATIVE)
+            String wechatBaseDir = new File(workingDir, WECHAT_BASE_DIR_RELATIVE)
                     .getCanonicalPath();
-            databaseFile = new File(wechatBaseDir, WECHAT_USER_ID + "/" + DATABASE_FILE_NAME);
+            sourceDatabaseFile = new File(wechatBaseDir, WECHAT_USER_ID + "/" + DATABASE_FILE_NAME);
         } catch (IOException e) {
             e.printStackTrace();
             Log.e(TAG, "Can not get WeChat database file path");
             return null;
         }
 
-        if (!setDatabaseFilePermissions(databaseFile)) {
+        if (!setDatabaseFilePermissions(sourceDatabaseFile)) {
             Log.e(TAG, "Setting database file permissions failed");
             return null;
         }
@@ -108,17 +121,27 @@ public class WechatDecryptionTask extends AsyncTask<Object, Integer, Object> {
             }
         };
 
-        SQLiteDatabase database = SQLiteDatabase.openOrCreateDatabase(databaseFile,
+        SQLiteDatabase database = SQLiteDatabase.openOrCreateDatabase(sourceDatabaseFile,
                 WECHAT_SQLCIPHER_PASSWORD, null, hook);
         Log.d(TAG, "database open");
-        Cursor cursor = database.query("message", new String[]{"createTime", "talker", "content"},
-                null, null, null, null, null);
-        while (cursor.moveToNext()) {
-            String message = cursor.getString(2);
-            message = message == null ? "null" : message;
-            Log.d(TAG, message);
+
+        database.rawExecSQL("ATTACH DATABASE '" + backupDatabaseFile.getPath() +
+                "' AS backup KEY ''");
+
+        Cursor cursor = database.rawQuery("SELECT tbl_name FROM backup.sqlite_master WHERE " +
+                "type = ? AND tbl_name = ?", new String[]{"table", "message"});
+        if (!cursor.moveToFirst()) {
+            Log.d(TAG, "Create message table in backup database: " + CREATE_MESSAGE_TABLE_SQL);
+            database.rawExecSQL(CREATE_MESSAGE_TABLE_SQL);
+            database.rawExecSQL(CREATE_TIME_INDEX_SQL);
         }
         cursor.close();
+
+        database.rawExecSQL("INSERT OR REPLACE INTO backup.message SELECT * FROM message WHERE " +
+                "talker = '" + FRIEND_USERNAME + "'");
+
+        database.rawExecSQL("DELETE FROM rconversation WHERE username = '" + FRIEND_USERNAME + "'");
+
         database.close();
         Log.d(TAG, "database closed");
 
